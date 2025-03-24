@@ -1,0 +1,2 @@
+#!/bin/bash
+"/home/jg/Music/claud/ntegratnytem/venv/bin/python" "/home/jg/Music/claud/ntegratnytem/system-builder.py" "$@"

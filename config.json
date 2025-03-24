@@ -1,0 +1,17 @@
+{
+    "dimensions": 4,
+    "resolution": 32,
+    "qubit_depth": 8,
+    "initial_nodes": 25,
+    "max_connections": 4,
+    "connection_radius": 0.6,
+    "evolution_interval": 20,
+    "output_dir": "output",
+    "data_dir": "data",
+    "logs_dir": "logs",
+    "auto_save_interval": 100,
+    "visualization_interval": 50,
+    "max_steps": 1000,
+    "gui_port": 8080,
+    "api_port": 5000
+}

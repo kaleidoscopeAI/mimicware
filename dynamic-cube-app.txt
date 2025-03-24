@@ -1,0 +1,431 @@
+#!/usr/bin/env python3
+"""
+Dynamic Cube Application
+A comprehensive application for running and visualizing the QuantumStringCube framework
+"""
+
+import numpy as np
+import time
+import json
+import argparse
+import os
+import threading
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for server environments
+import matplotlib.pyplot as plt
+from typing import Dict, List, Any, Tuple, Optional
+
+# Import the core framework
+from quantum_string_cube import (
+    QuantumStringCube, 
+    ConsciousCubeInterface, 
+    EvolvingNodeDNA,
+    ResonanceMode,
+    visualize_cube_2d,
+    visualize_cube_3d,
+    visualize_network_graph,
+    plot_consciousness_evolution,
+    serialize_cube_state,
+    deserialize_cube_state
+)
+
+class DynamicCubeApp:
+    """Main application for running and controlling a Dynamic Cube"""
+    
+    def __init__(self):
+        """Initialize the application"""
+        self.cube = None
+        self.config = {
+            "dimensions": 4,
+            "resolution": 32,
+            "qubit_depth": 8,
+            "initial_nodes": 20,
+            "max_connections": 5,
+            "connection_radius": 0.6,
+            "evolution_interval": 20,
+            "output_dir": "output"
+        }
+        self.running = False
+        self.simulation_thread = None
+        self.step_counter = 0
+        self.step_callbacks = []
+        self.simulation_stats = {
+            "start_time": None,
+            "elapsed_time": 0,
+            "steps": 0,
+            "emergent_events": 0,
+            "energy_history": [],
+            "consciousness_history": []
+        }
+        
+        # Ensure output directory exists
+        os.makedirs(self.config["output_dir"], exist_ok=True)
+    
+    def init_cube(self):
+        """Initialize the cube with current configuration"""
+        print(f"Initializing cube with dimensions={self.config['dimensions']}, "
+              f"resolution={self.config['resolution']}, qubit_depth={self.config['qubit_depth']}")
+        
+        # Create the conscious cube interface
+        self.cube = ConsciousCubeInterface(
+            dimensions=self.config["dimensions"],
+            resolution=self.config["resolution"],
+            qubit_depth=self.config["qubit_depth"]
+        )
+        
+        # Reset statistics
+        self.step_counter = 0
+        self.simulation_stats = {
+            "start_time": time.time(),
+            "elapsed_time": 0,
+            "steps": 0,
+            "emergent_events": 0,
+            "energy_history": [],
+            "consciousness_history": []
+        }
+        
+        # Add initial nodes
+        self.add_initial_nodes(self.config["initial_nodes"])
+        
+        return self.cube
+    
+    def add_initial_nodes(self, count: int):
+        """Add initial nodes to the cube"""
+        if self.cube is None:
+            raise ValueError("Cube must be initialized before adding nodes")
+            
+        for _ in range(count):
+            # Random position
+            position = np.random.rand(self.config["dimensions"]) * 2 - 1  # Range [-1, 1]
+            
+            # Random properties
+            properties = {
+                'energy': np.random.uniform(0.4, 0.8),
+                'stability': np.random.uniform(0.5, 0.9),
+                'phase': np.random.uniform(0, 2 * np.pi)
+            }
+            
+            # Add node
+            self.cube.add_node(properties, position)
+        
+        # Connect nodes
+        self.cube.auto_connect_nodes(
+            max_connections_per_node=self.config["max_connections"],
+            connection_radius=self.config["connection_radius"]
+        )
+        
+        print(f"Added {count} initial nodes with connections")
+    
+    def add_single_node(self, energy: float = 0.7, stability: float = 0.8, phase: Optional[float] = None):
+        """Add a single node to the cube"""
+        if self.cube is None:
+            raise ValueError("Cube must be initialized before adding nodes")
+            
+        # Random position
+        position = np.random.rand(self.config["dimensions"]) * 2 - 1  # Range [-1, 1]
+        
+        # Set phase
+        if phase is None:
+            phase = np.random.uniform(0, 2 * np.pi)
+            
+        # Create properties
+        properties = {
+            'energy': energy,
+            'stability': stability,
+            'phase': phase
+        }
+        
+        # Add node
+        node_id = self.cube.add_node(properties, position)
+        
+        # Connect to some existing nodes
+        existing_nodes = list(self.cube.nodes.keys())
+        if len(existing_nodes) > 1:  # Don't try to connect if this is the only node
+            connect_count = min(self.config["max_connections"], len(existing_nodes) - 1)
+            for target_id in np.random.choice(
+                [n for n in existing_nodes if n != node_id],
+                connect_count,
+                replace=False
+            ):
+                self.cube.connect_nodes(node_id, target_id)
+        
+        print(f"Added node {node_id} with {connect_count if len(existing_nodes) > 1 else 0} connections")
+        return node_id
+    
+    def start_simulation(self, max_steps: Optional[int] = None):
+        """Start the simulation in a background thread"""
+        if self.running:
+            print("Simulation already running")
+            return
+            
+        if self.cube is None:
+            self.init_cube()
+            
+        self.running = True
+        self.simulation_stats["start_time"] = time.time()
+        
+        # Start simulation thread
+        self.simulation_thread = threading.Thread(
+            target=self._simulation_loop,
+            args=(max_steps,),
+            daemon=True
+        )
+        self.simulation_thread.start()
+        
+        print(f"Simulation started with {max_steps if max_steps else 'unlimited'} steps")
+    
+    def _simulation_loop(self, max_steps: Optional[int] = None):
+        """Internal simulation loop that runs in a background thread"""
+        try:
+            while self.running and (max_steps is None or self.step_counter < max_steps):
+                self.step_once()
+                time.sleep(0.01)  # Prevent thread from hogging resources
+        except Exception as e:
+            print(f"Error in simulation loop: {str(e)}")
+            self.running = False
+    
+    def step_once(self):
+        """Perform a single simulation step"""
+        if self.cube is None:
+            raise ValueError("Cube must be initialized before stepping")
+            
+        # Run the simulation step
+        self.cube.simulate_step()
+        
+        # Update counters
+        self.step_counter += 1
+        self.simulation_stats["steps"] += 1
+        
+        # Record statistics
+        state = self.cube.get_state()
+        self.simulation_stats["elapsed_time"] = time.time() - self.simulation_stats["start_time"]
+        self.simulation_stats["emergent_events"] = state["consciousness"]["emergent_events"]
+        self.simulation_stats["energy_history"].append(state["stats"]["energy_level"])
+        self.simulation_stats["consciousness_history"].append(state["consciousness"]["global_level"])
+        
+        # Keep history at reasonable size
+        max_history = 1000
+        if len(self.simulation_stats["energy_history"]) > max_history:
+            self.simulation_stats["energy_history"] = self.simulation_stats["energy_history"][-max_history:]
+        if len(self.simulation_stats["consciousness_history"]) > max_history:
+            self.simulation_stats["consciousness_history"] = self.simulation_stats["consciousness_history"][-max_history:]
+        
+        # Run evolution if needed
+        if self.step_counter % self.config["evolution_interval"] == 0:
+            self.cube.evolve_nodes()
+            print(f"Step {self.step_counter}: Evolved nodes. Consciousness: {self.cube.global_consciousness_level:.4f}")
+        
+        # Execute callbacks
+        for callback in self.step_callbacks:
+            try:
+                callback(self.step_counter, state)
+            except Exception as e:
+                print(f"Error in step callback: {str(e)}")
+    
+    def stop_simulation(self):
+        """Stop the running simulation"""
+        self.running = False
+        if self.simulation_thread and self.simulation_thread.is_alive():
+            self.simulation_thread.join(timeout=1.0)
+        print("Simulation stopped")
+    
+    def save_state(self, filepath: Optional[str] = None):
+        """Save the current cube state"""
+        if self.cube is None:
+            raise ValueError("Cube must be initialized before saving")
+            
+        if filepath is None:
+            filepath = os.path.join(self.config["output_dir"], f"cube_state_{int(time.time())}.json")
+            
+        # Serialize cube state
+        state = serialize_cube_state(self.cube.cube)
+        
+        # Add application metadata
+        state["application_metadata"] = {
+            "config": self.config,
+            "step_counter": self.step_counter,
+            "simulation_stats": {
+                k: v for k, v in self.simulation_stats.items() 
+                if k not in ["energy_history", "consciousness_history"]
+            }
+        }
+        
+        # Save to file
+        with open(filepath, "w") as f:
+            json.dump(state, f, indent=2)
+            
+        print(f"Saved cube state to {filepath}")
+        return filepath
+    
+    def load_state(self, filepath: str):
+        """Load cube state from file"""
+        with open(filepath, "r") as f:
+            state = json.load(f)
+            
+        # Extract application metadata if present
+        if "application_metadata" in state:
+            app_meta = state.pop("application_metadata")
+            self.config.update(app_meta.get("config", {}))
+            self.step_counter = app_meta.get("step_counter", 0)
+            self.simulation_stats.update(app_meta.get("simulation_stats", {}))
+        
+        # Deserialize cube
+        self.cube = ConsciousCubeInterface(
+            dimensions=self.config["dimensions"],
+            resolution=self.config["resolution"],
+            qubit_depth=self.config["qubit_depth"]
+        )
+        
+        # Set the cube's internal state
+        self.cube.cube = deserialize_cube_state(state)
+        
+        # Restore node data and DNA
+        self._restore_node_data()
+        
+        print(f"Loaded cube state from {filepath}")
+        return self.cube
+    
+    def _restore_node_data(self):
+        """Restore node data and DNA after loading state"""
+        # Create node data and DNA objects
+        for node_id in self.cube.cube.nodes:
+            if node_id not in self.cube.nodes:
+                # Create basic node data
+                node_pos = self.cube.cube.node_positions[node_id].coordinates
+                node_props = self.cube.cube.nodes[node_id]['properties']
+                
+                self.cube.nodes[node_id] = {
+                    'id': node_id,
+                    'position': node_pos,
+                    'properties': node_props,
+                    'connections': list(self.cube.cube.node_connections[node_id]),
+                    'performance': 0.5,
+                    'creation_time': self.simulation_stats["steps"]
+                }
+                
+                # Create DNA
+                dna = EvolvingNodeDNA()
+                if 'dna_traits' in node_props:
+                    dna.traits = node_props['dna_traits']
+                self.cube.node_dna[node_id] = dna
+    
+    def generate_visualizations(self, base_filename: Optional[str] = None):
+        """Generate visualizations of the current cube state"""
+        if self.cube is None:
+            raise ValueError("Cube must be initialized before generating visualizations")
+            
+        if base_filename is None:
+            base_filename = os.path.join(self.config["output_dir"], f"cube_{int(time.time())}")
+            
+        # 2D visualization
+        fig2d = visualize_cube_2d(self.cube.cube)
+        fig2d.savefig(f"{base_filename}_2d.png")
+        plt.close(fig2d)
+        
+        # 3D visualization if dimensions allow
+        if self.config["dimensions"] >= 3:
+            fig3d = visualize_cube_3d(self.cube.cube)
+            fig3d.savefig(f"{base_filename}_3d.png")
+            plt.close(fig3d)
+        
+        # Network graph
+        network_fig = visualize_network_graph(self.cube)
+        network_fig.savefig(f"{base_filename}_network.png")
+        plt.close(network_fig)
+        
+        # Consciousness evolution
+        consciousness_fig = plot_consciousness_evolution(self.cube)
+        consciousness_fig.savefig(f"{base_filename}_consciousness.png")
+        plt.close(consciousness_fig)
+        
+        # Plot metrics
+        self._plot_simulation_metrics(f"{base_filename}_metrics.png")
+        
+        print(f"Generated visualizations with base filename: {base_filename}")
+    
+    def _plot_simulation_metrics(self, filename: str):
+        """Plot simulation metrics"""
+        plt.figure(figsize=(12, 8))
+        
+        # Consciousness history
+        plt.subplot(2, 1, 1)
+        plt.plot(self.simulation_stats["consciousness_history"])
+        plt.title('Consciousness Level History')
+        plt.ylabel('Consciousness')
+        plt.grid(alpha=0.3)
+        
+        # Energy history
+        plt.subplot(2, 1, 2)
+        plt.plot(self.simulation_stats["energy_history"])
+        plt.title('Energy Level History')
+        plt.xlabel('Simulation Steps')
+        plt.ylabel('Energy')
+        plt.grid(alpha=0.3)
+        
+        plt.suptitle(f"Simulation Metrics (Steps: {self.simulation_stats['steps']})")
+        plt.tight_layout()
+        plt.savefig(filename)
+        plt.close()
+    
+    def get_state_summary(self) -> Dict[str, Any]:
+        """Get a summary of the current cube state"""
+        if self.cube is None:
+            return {"error": "Cube not initialized"}
+            
+        state = self.cube.get_state()
+        
+        return {
+            "simulation": {
+                "steps": self.simulation_stats["steps"],
+                "elapsed_time": self.simulation_stats["elapsed_time"],
+                "is_running": self.running
+            },
+            "cube": {
+                "dimensions": self.config["dimensions"],
+                "resolution": self.config["resolution"],
+                "node_count": len(self.cube.nodes),
+                "connection_count": sum(len(connections) for node_id, connections in self.cube.node_connections.items()) // 2
+            },
+            "consciousness": {
+                "level": state["consciousness"]["global_level"],
+                "emergent_events": state["consciousness"]["emergent_events"],
+                "emergent_properties": state["consciousness"]["emergent_properties"]
+            },
+            "energy": state["stats"]["energy_level"],
+            "average_performance": state["stats"]["avg_performance"]
+        }
+
+    def add_random_resonance(self, strength: float = 0.3):
+        """Add a random resonance pattern to the cube's tensor field"""
+        if self.cube is None:
+            raise ValueError("Cube must be initialized first")
+            
+        # Random position
+        position = tuple(np.random.randint(0, self.config["resolution"], size=self.config["dimensions"]))
+        
+        # Random radius
+        radius = np.random.randint(2, 6)
+        
+        # Random mode
+        mode = np.random.choice(list(ResonanceMode))
+        
+        # Apply resonance
+        self.cube.cube.tensor_field.apply_resonance(
+            position=position,
+            radius=radius,
+            strength=strength,
+            mode=mode
+        )
+        
+        print(f"Applied {mode.name} resonance at {position} with radius {radius}")
+        return {"position": position, "radius": radius, "mode": mode.name}
+    
+    def remove_lowest_performing_nodes(self, count: int = 1):
+        """Remove the lowest performing nodes"""
+        if self.cube is None or len(self.cube.nodes) <= count:
+            return []
+            
+        # Sort nodes by performance
+        sorted_nodes = sorted(
+            self.cube.nodes.items(),
+            key=lambda x: x[1]['performance

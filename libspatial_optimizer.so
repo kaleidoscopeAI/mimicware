@@ -1,0 +1,209 @@
+import ctypes
+import numpy as np
+import os
+
+# Load the C extension library
+lib_path = os.path.join(os.path.dirname(__file__), 'libspatial_optimizer.so')
+_lib = ctypes.CDLL(lib_path)
+
+# Define function prototypes
+_lib.batch_point_line_distance.argtypes = [
+    ctypes.POINTER(ctypes.c_float),  # points_x
+    ctypes.POINTER(ctypes.c_float),  # points_y
+    ctypes.POINTER(ctypes.c_float),  # line_starts_x
+    ctypes.POINTER(ctypes.c_float),  # line_starts_y
+    ctypes.POINTER(ctypes.c_float),  # line_ends_x
+    ctypes.POINTER(ctypes.c_float),  # line_ends_y
+    ctypes.POINTER(ctypes.c_float),  # distances
+    ctypes.c_int,                    # num_points
+    ctypes.c_int                     # num_lines
+]
+_lib.batch_point_line_distance.restype = None
+
+_lib.batch_point_in_polygon.argtypes = [
+    ctypes.POINTER(ctypes.c_float),  # points_x
+    ctypes.POINTER(ctypes.c_float),  # points_y
+    ctypes.POINTER(ctypes.c_float),  # polygon_x
+    ctypes.POINTER(ctypes.c_float),  # polygon_y
+    ctypes.POINTER(ctypes.c_int),    # results
+    ctypes.c_int,                    # num_points
+    ctypes.c_int                     # num_vertices
+]
+_lib.batch_point_in_polygon.restype = None
+
+_lib.rtree_nearest_neighbors.argtypes = [
+    ctypes.POINTER(ctypes.c_float),  # query_points_x
+    ctypes.POINTER(ctypes.c_float),  # query_points_y
+    ctypes.POINTER(ctypes.c_float),  # node_centers_x
+    ctypes.POINTER(ctypes.c_float),  # node_centers_y
+    ctypes.POINTER(ctypes.c_float),  # node_extents_x
+    ctypes.POINTER(ctypes.c_float),  # node_extents_y
+    ctypes.POINTER(ctypes.c_int),    # results_indices
+    ctypes.POINTER(ctypes.c_float),  # results_distances
+    ctypes.c_int,                    # num_queries
+    ctypes.c_int,                    # num_nodes
+    ctypes.c_int                     # k_neighbors
+]
+_lib.rtree_nearest_neighbors.restype = None
+
+# Wrapper functions with NumPy array support
+def point_line_distance_batch(points, line_starts, line_ends):
+    """
+    Calculate distances from multiple points to multiple lines
+    
+    Args:
+        points: array of shape (n, 2) with point coordinates
+        line_starts: array of shape (m, 2) with line start points
+        line_ends: array of shape (m, 2) with line end points
+        
+    Returns:
+        distances: array of shape (m, n) with distances from each line to each point
+    """
+    points = np.asarray(points, dtype=np.float32)
+    line_starts = np.asarray(line_starts, dtype=np.float32)
+    line_ends = np.asarray(line_ends, dtype=np.float32)
+    
+    num_points = points.shape[0]
+    num_lines = line_starts.shape[0]
+    
+    # Create output array
+    distances = np.zeros((num_lines, num_points), dtype=np.float32)
+    
+    # Prepare pointers
+    points_x = points[:, 0].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    points_y = points[:, 1].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    line_starts_x = line_starts[:, 0].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    line_starts_y = line_starts[:, 1].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    line_ends_x = line_ends[:, 0].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    line_ends_y = line_ends[:, 1].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    
+    # Call C function
+    _lib.batch_point_line_distance(
+        points_x, points_y,
+        line_starts_x, line_starts_y,
+        line_ends_x, line_ends_y,
+        distances.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        num_points, num_lines
+    )
+    
+    return distances
+
+def points_in_polygon(points, polygon):
+    """
+    Test if points are inside a polygon
+    
+    Args:
+        points: array of shape (n, 2) with point coordinates
+        polygon: array of shape (m, 2) with polygon vertices
+        
+    Returns:
+        results: boolean array of shape (n,) indicating which points are inside
+    """
+    points = np.asarray(points, dtype=np.float32)
+    polygon = np.asarray(polygon, dtype=np.float32)
+    
+    num_points = points.shape[0]
+    num_vertices = polygon.shape[0]
+    
+    # Create output array
+    results = np.zeros(num_points, dtype=np.int32)
+    
+    # Prepare pointers
+    points_x = points[:, 0].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    points_y = points[:, 1].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    polygon_x = polygon[:, 0].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    polygon_y = polygon[:, 1].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    
+    # Call C function
+    _lib.batch_point_in_polygon(
+        points_x, points_y,
+        polygon_x, polygon_y,
+        results.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
+        num_points, num_vertices
+    )
+    
+    return results.astype(bool)
+
+def nearest_neighbors(query_points, nodes, k=5):
+    """
+    Find k nearest neighbors for each query point
+    
+    Args:
+        query_points: array of shape (n, 2) with query point coordinates
+        nodes: list of dictionaries with 'x', 'y', 'width', 'height' keys
+        k: number of neighbors to find
+        
+    Returns:
+        indices: array of shape (n, k) with indices of nearest neighbors
+        distances: array of shape (n, k) with distances to nearest neighbors
+    """
+    query_points = np.asarray(query_points, dtype=np.float32)
+    
+    num_queries = query_points.shape[0]
+    num_nodes = len(nodes)
+    
+    # Extract node centers and extents
+    centers_x = np.array([node['x'] for node in nodes], dtype=np.float32)
+    centers_y = np.array([node['y'] for node in nodes], dtype=np.float32)
+    extents_x = np.array([node.get('width', 0) / 2 for node in nodes], dtype=np.float32)
+    extents_y = np.array([node.get('height', 0) / 2 for node in nodes], dtype=np.float32)
+    
+    # Create output arrays
+    indices = np.zeros((num_queries, k), dtype=np.int32)
+    distances = np.zeros((num_queries, k), dtype=np.float32)
+    
+    # Prepare pointers
+    query_points_x = query_points[:, 0].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    query_points_y = query_points[:, 1].ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    centers_x_ptr = centers_x.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    centers_y_ptr = centers_y.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    extents_x_ptr = extents_x.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    extents_y_ptr = extents_y.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    
+    # Call C function
+    _lib.rtree_nearest_neighbors(
+        query_points_x, query_points_y,
+        centers_x_ptr, centers_y_ptr,
+        extents_x_ptr, extents_y_ptr,
+        indices.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
+        distances.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        num_queries, num_nodes, k
+    )
+    
+    return indices, distances
+
+# Enhanced DiagramAnalyzer class that uses the optimized C functions
+class EnhancedDiagramAnalyzer(DiagramAnalyzer):
+    def __init__(self):
+        super().__init__()
+        self.use_optimized = True  # Flag to control whether to use optimized C functions
+    
+    def _find_closest_element(self, x, y, max_distance=40.0, exclude_types=None):
+        """Overridden to use optimized nearest neighbor search"""
+        if not self.use_optimized or not self.elements:
+            return super()._find_closest_element(x, y, max_distance, exclude_types)
+        
+        exclude_types = exclude_types or []
+        
+        # Filter elements by type
+        valid_elements = [i for i, elem in enumerate(self.elements) 
+                         if elem.type not in exclude_types]
+        
+        if not valid_elements:
+            return None
+        
+        # Prepare element centers for nearest neighbor search
+        query_point = np.array([[x, y]], dtype=np.float32)
+        
+        # Get subset of elements
+        subset_elements = [self.elements[i] for i in valid_elements]
+        
+        # Use optimized nearest neighbors search
+        indices, distances = nearest_neighbors(query_point, subset_elements, k=5)
+        
+        # Get the closest element if distance is within threshold
+        for i, dist in zip(indices[0], distances[0]):
+            if dist <= max_distance:
+                return valid_elements[i]
+        
+        return None

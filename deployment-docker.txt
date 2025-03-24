@@ -1,0 +1,152 @@
+# Dockerfile
+FROM python:3.9-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    wget \
+    git \
+    curl \
+    libopenmpi-dev \
+    openmpi-bin \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create directories for static files
+RUN mkdir -p /app/static/css
+RUN mkdir -p /app/static/js
+RUN mkdir -p /app/templates
+
+# Copy static files
+COPY static/css/styles.css /app/static/css/
+COPY static/js/dashboard.js /app/static/js/
+COPY templates/index.html /app/templates/
+
+# Create directory for temporary files
+RUN mkdir -p /app/temp
+
+# Expose port
+EXPOSE 5000
+
+# Run the application
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "visualization_server:app"]
+
+# requirements.txt
+flask==2.2.3
+plotly==5.13.0
+numpy==1.23.5
+torch==2.0.0
+ray==2.3.0
+pandas==1.5.3
+scipy==1.10.1
+networkx==3.0
+matplotlib==3.7.1
+mpi4py==3.1.4
+horovod==0.27.0
+transformers==4.27.1
+pennylane==0.28.0
+qiskit==0.42.0
+gudhi==3.7.1
+dionysus==2.0.8
+gunicorn==20.1.0
+scikit-learn==1.2.2
+python-dotenv==1.0.0
+
+# docker-compose.yml
+version: '3.8'
+
+services:
+  kaleidoscope-web:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - FLASK_APP=visualization_server.py
+      - FLASK_ENV=production
+      - SECRET_KEY=${SECRET_KEY}
+      - WORLD_SIZE=4
+    restart: unless-stopped
+    depends_on:
+      - redis
+      
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    
+  worker-1:
+    build: .
+    command: python worker.py --rank 0 --world-size 4
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - REDIS_HOST=redis
+      - WORLD_SIZE=4
+      - RANK=0
+    depends_on:
+      - redis
+    restart: unless-stopped
+    
+  worker-2:
+    build: .
+    command: python worker.py --rank 1 --world-size 4
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - REDIS_HOST=redis
+      - WORLD_SIZE=4
+      - RANK=1
+    depends_on:
+      - redis
+    restart: unless-stopped
+    
+  worker-3:
+    build: .
+    command: python worker.py --rank 2 --world-size 4
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - REDIS_HOST=redis
+      - WORLD_SIZE=4
+      - RANK=2
+    depends_on:
+      - redis
+    restart: unless-stopped
+    
+  worker-4:
+    build: .
+    command: python worker.py --rank 3 --world-size 4
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - REDIS_HOST=redis
+      - WORLD_SIZE=4
+      - RANK=3
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+
+# .env (create this file separately, don't check into version control)
+SECRET_KEY=your-secret-key-here

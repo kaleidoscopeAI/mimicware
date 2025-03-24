@@ -1,0 +1,726 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <time.h>
+
+// Advanced data structures for script dependency analysis
+typedef enum {
+    SCRIPT_TYPE_PYTHON = 0,
+    SCRIPT_TYPE_SHELL,
+    SCRIPT_TYPE_C,
+    SCRIPT_TYPE_CPP,
+    SCRIPT_TYPE_JAVASCRIPT,
+    SCRIPT_TYPE_ASSEMBLY,
+    SCRIPT_TYPE_UNKNOWN
+} ScriptType;
+
+typedef enum {
+    DEPENDENCY_IMPORT = 0,
+    DEPENDENCY_EXECUTION,
+    DEPENDENCY_DATA,
+    DEPENDENCY_RESOURCE
+} DependencyType;
+
+typedef struct {
+    int id;                 // Node ID
+    int weight;             // Computational weight
+    ScriptType script_type; // Type of script
+    char path[512];         // Path to script file
+    int num_dependencies;   // Number of dependencies
+    int* dependencies;      // Array of dependency node IDs
+    DependencyType* dep_types; // Types of dependencies
+} Node;
+
+typedef struct {
+    int num_nodes;         // Number of nodes
+    Node* nodes;           // Array of nodes
+    int** adjacency_matrix; // Adjacency matrix
+    bool* visited;         // For graph traversal
+} Graph;
+
+// Create a new graph
+Graph* create_graph(int num_nodes) {
+    Graph* graph = (Graph*)malloc(sizeof(Graph));
+    if (!graph) {
+        perror("Memory allocation failed for graph");
+        return NULL;
+    }
+    
+    graph->num_nodes = num_nodes;
+    
+    // Allocate nodes array
+    graph->nodes = (Node*)calloc(num_nodes, sizeof(Node));
+    if (!graph->nodes) {
+        perror("Memory allocation failed for nodes");
+        free(graph);
+        return NULL;
+    }
+    
+    // Allocate adjacency matrix
+    graph->adjacency_matrix = (int**)malloc(num_nodes * sizeof(int*));
+    if (!graph->adjacency_matrix) {
+        perror("Memory allocation failed for adjacency matrix");
+        free(graph->nodes);
+        free(graph);
+        return NULL;
+    }
+    
+    for (int i = 0; i < num_nodes; i++) {
+        graph->adjacency_matrix[i] = (int*)calloc(num_nodes, sizeof(int));
+        if (!graph->adjacency_matrix[i]) {
+            perror("Memory allocation failed for adjacency matrix row");
+            for (int j = 0; j < i; j++) {
+                free(graph->adjacency_matrix[j]);
+            }
+            free(graph->adjacency_matrix);
+            free(graph->nodes);
+            free(graph);
+            return NULL;
+        }
+    }
+    
+    // Allocate visited array for traversal
+    graph->visited = (bool*)calloc(num_nodes, sizeof(bool));
+    if (!graph->visited) {
+        perror("Memory allocation failed for visited array");
+        for (int i = 0; i < num_nodes; i++) {
+            free(graph->adjacency_matrix[i]);
+        }
+        free(graph->adjacency_matrix);
+        free(graph->nodes);
+        free(graph);
+        return NULL;
+    }
+    
+    // Initialize nodes
+    for (int i = 0; i < num_nodes; i++) {
+        graph->nodes[i].id = i;
+        graph->nodes[i].weight = 0;
+        graph->nodes[i].script_type = SCRIPT_TYPE_UNKNOWN;
+        graph->nodes[i].path[0] = '\0';
+        graph->nodes[i].num_dependencies = 0;
+        graph->nodes[i].dependencies = NULL;
+        graph->nodes[i].dep_types = NULL;
+    }
+    
+    return graph;
+}
+
+// Set node properties
+void set_node_properties(Graph* graph, int node_id, ScriptType script_type, const char* path, int weight) {
+    if (!graph || node_id < 0 || node_id >= graph->num_nodes) {
+        return;
+    }
+    
+    Node* node = &graph->nodes[node_id];
+    node->script_type = script_type;
+    strncpy(node->path, path, sizeof(node->path) - 1);
+    node->path[sizeof(node->path) - 1] = '\0';
+    node->weight = weight;
+}
+
+// Add edge to graph
+void add_edge(Graph* graph, int source, int target, DependencyType dep_type) {
+    if (!graph || source < 0 || source >= graph->num_nodes || 
+        target < 0 || target >= graph->num_nodes) {
+        return;
+    }
+    
+    // Update adjacency matrix
+    graph->adjacency_matrix[source][target] = 1;
+    
+    // Update source node's dependencies
+    Node* node = &graph->nodes[source];
+    
+    // Reallocate dependencies array
+    int new_size = node->num_dependencies + 1;
+    int* new_deps = (int*)realloc(node->dependencies, new_size * sizeof(int));
+    if (!new_deps) {
+        perror("Memory allocation failed for dependencies");
+        return;
+    }
+    node->dependencies = new_deps;
+    
+    // Reallocate dependency types array
+    DependencyType* new_dep_types = (DependencyType*)realloc(
+        node->dep_types, new_size * sizeof(DependencyType));
+    if (!new_dep_types) {
+        perror("Memory allocation failed for dependency types");
+        return;
+    }
+    node->dep_types = new_dep_types;
+    
+    // Add the new dependency
+    node->dependencies[node->num_dependencies] = target;
+    node->dep_types[node->num_dependencies] = dep_type;
+    node->num_dependencies = new_size;
+}
+
+// Optimized topological sort implementation
+bool topological_sort(Graph* graph, int* result, int* result_size) {
+    if (!graph || !result || !result_size) {
+        return false;
+    }
+    
+    int num_nodes = graph->num_nodes;
+    int* in_degree = (int*)calloc(num_nodes, sizeof(int));
+    if (!in_degree) {
+        perror("Memory allocation failed for in-degree array");
+        return false;
+    }
+    
+    // Reset result size
+    *result_size = 0;
+    
+    // Calculate in-degree for each node
+    for (int i = 0; i < num_nodes; i++) {
+        for (int j = 0; j < num_nodes; j++) {
+            if (graph->adjacency_matrix[i][j]) {
+                in_degree[j]++;
+            }
+        }
+    }
+    
+    // Create queue with nodes that have in-degree of 0
+    int* queue = (int*)malloc(num_nodes * sizeof(int));
+    if (!queue) {
+        perror("Memory allocation failed for queue");
+        free(in_degree);
+        return false;
+    }
+    
+    int front = 0, rear = 0;
+    
+    for (int i = 0; i < num_nodes; i++) {
+        if (in_degree[i] == 0) {
+            queue[rear++] = i;
+        }
+    }
+    
+    // Process the queue (Kahn's algorithm)
+    while (front < rear) {
+        int current = queue[front++];
+        result[(*result_size)++] = current;
+        
+        // For each node that depends on the current node
+        for (int i = 0; i < num_nodes; i++) {
+            if (graph->adjacency_matrix[current][i]) {
+                // Reduce in-degree and add to queue if in-degree becomes 0
+                if (--in_degree[i] == 0) {
+                    queue[rear++] = i;
+                }
+            }
+        }
+    }
+    
+    // Check if we included all nodes (no cycles)
+    bool success = (*result_size == num_nodes);
+    
+    free(queue);
+    free(in_degree);
+    
+    return success;
+}
+
+// Detect cycles in the graph using DFS
+bool has_cycle_util(Graph* graph, int node, bool* recursion_stack) {
+    // Mark current node as visited and add to recursion stack
+    graph->visited[node] = true;
+    recursion_stack[node] = true;
+    
+    // Recur for all adjacent vertices
+    for (int i = 0; i < graph->num_nodes; i++) {
+        if (graph->adjacency_matrix[node][i]) {
+            // If not visited, recursively check
+            if (!graph->visited[i] && has_cycle_util(graph, i, recursion_stack)) {
+                return true;
+            }
+            // If visited and in recursion stack, cycle exists
+            else if (recursion_stack[i]) {
+                return true;
+            }
+        }
+    }
+    
+    // Remove from recursion stack
+    recursion_stack[node] = false;
+    return false;
+}
+
+bool has_cycle(Graph* graph) {
+    if (!graph) {
+        return false;
+    }
+    
+    // Reset visited array
+    memset(graph->visited, 0, graph->num_nodes * sizeof(bool));
+    
+    // Create recursion stack
+    bool* recursion_stack = (bool*)calloc(graph->num_nodes, sizeof(bool));
+    if (!recursion_stack) {
+        perror("Memory allocation failed for recursion stack");
+        return false;
+    }
+    
+    // Check for cycle starting from each node
+    for (int i = 0; i < graph->num_nodes; i++) {
+        if (!graph->visited[i]) {
+            if (has_cycle_util(graph, i, recursion_stack)) {
+                free(recursion_stack);
+                return true;
+            }
+        }
+    }
+    
+    free(recursion_stack);
+    return false;
+}
+
+// Calculate critical path using dynamic programming
+int* calculate_critical_path(Graph* graph, int* critical_path_length) {
+    if (!graph || !critical_path_length) {
+        return NULL;
+    }
+    
+    int num_nodes = graph->num_nodes;
+    
+    // Calculate earliest completion time for each node
+    int* earliest = (int*)calloc(num_nodes, sizeof(int));
+    if (!earliest) {
+        perror("Memory allocation failed for earliest times");
+        return NULL;
+    }
+    
+    // Get topological order
+    int* topo_order = (int*)malloc(num_nodes * sizeof(int));
+    if (!topo_order) {
+        perror("Memory allocation failed for topological order");
+        free(earliest);
+        return NULL;
+    }
+    
+    int order_size;
+    if (!topological_sort(graph, topo_order, &order_size)) {
+        free(topo_order);
+        free(earliest);
+        return NULL;
+    }
+    
+    // Initialize earliest times
+    for (int i = 0; i < num_nodes; i++) {
+        earliest[i] = 0;
+    }
+    
+    // Fill earliest times in topological order
+    for (int i = 0; i < order_size; i++) {
+        int u = topo_order[i];
+        
+        // For each dependent node
+        for (int j = 0; j < num_nodes; j++) {
+            if (graph->adjacency_matrix[u][j]) {
+                int weight = graph->nodes[u].weight;
+                if (earliest[j] < earliest[u] + weight) {
+                    earliest[j] = earliest[u] + weight;
+                }
+            }
+        }
+    }
+    
+    // Find the maximum earliest time (critical path length)
+    int max_time = 0;
+    for (int i = 0; i < num_nodes; i++) {
+        if (earliest[i] > max_time) {
+            max_time = earliest[i];
+        }
+    }
+    *critical_path_length = max_time;
+    
+    // Calculate latest times for each node
+    int* latest = (int*)malloc(num_nodes * sizeof(int));
+    if (!latest) {
+        perror("Memory allocation failed for latest times");
+        free(topo_order);
+        free(earliest);
+        return NULL;
+    }
+    
+    // Initialize latest times
+    for (int i = 0; i < num_nodes; i++) {
+        latest[i] = max_time;
+    }
+    
+    // Fill latest times in reverse topological order
+    for (int i = order_size - 1; i >= 0; i--) {
+        int u = topo_order[i];
+        
+        for (int j = 0; j < num_nodes; j++) {
+            if (graph->adjacency_matrix[u][j]) {
+                int weight = graph->nodes[u].weight;
+                if (latest[u] > latest[j] - weight) {
+                    latest[u] = latest[j] - weight;
+                }
+            }
+        }
+    }
+    
+    // Calculate slack for each node and find critical path
+    int* critical_path = (int*)calloc(num_nodes, sizeof(int));
+    if (!critical_path) {
+        perror("Memory allocation failed for critical path");
+        free(latest);
+        free(topo_order);
+        free(earliest);
+        return NULL;
+    }
+    
+    // Nodes with zero slack are on the critical path
+    for (int i = 0; i < num_nodes; i++) {
+        int slack = latest[i] - earliest[i];
+        if (slack == 0) {
+            critical_path[i] = 1;  // Mark as part of critical path
+        }
+    }
+    
+    free(latest);
+    free(topo_order);
+    free(earliest);
+    
+    return critical_path;
+}
+
+// Calculate optimal parallelization schedule
+int** calculate_parallel_schedule(Graph* graph, int num_processors, int* schedule_length) {
+    if (!graph || !schedule_length || num_processors <= 0) {
+        return NULL;
+    }
+    
+    int num_nodes = graph->num_nodes;
+    
+    // Get topological order
+    int* topo_order = (int*)malloc(num_nodes * sizeof(int));
+    if (!topo_order) {
+        perror("Memory allocation failed for topological order");
+        return NULL;
+    }
+    
+    int order_size;
+    if (!topological_sort(graph, topo_order, &order_size)) {
+        free(topo_order);
+        return NULL;
+    }
+    
+    // Calculate critical path for priority
+    int critical_path_length;
+    int* on_critical_path = calculate_critical_path(graph, &critical_path_length);
+    if (!on_critical_path) {
+        free(topo_order);
+        return NULL;
+    }
+    
+    // Initialize schedule
+    int** schedule = (int**)malloc(num_processors * sizeof(int*));
+    if (!schedule) {
+        perror("Memory allocation failed for schedule");
+        free(on_critical_path);
+        free(topo_order);
+        return NULL;
+    }
+    
+    for (int i = 0; i < num_processors; i++) {
+        schedule[i] = (int*)malloc(num_nodes * sizeof(int));
+        if (!schedule[i]) {
+            perror("Memory allocation failed for processor schedule");
+            for (int j = 0; j < i; j++) {
+                free(schedule[j]);
+            }
+            free(schedule);
+            free(on_critical_path);
+            free(topo_order);
+            return NULL;
+        }
+        // Initialize with -1 (no task)
+        for (int j = 0; j < num_nodes; j++) {
+            schedule[i][j] = -1;
+        }
+    }
+    
+    // Track when each node finishes
+    int* node_finish_time = (int*)calloc(num_nodes, sizeof(int));
+    if (!node_finish_time) {
+        perror("Memory allocation failed for node finish times");
+        for (int i = 0; i < num_processors; i++) {
+            free(schedule[i]);
+        }
+        free(schedule);
+        free(on_critical_path);
+        free(topo_order);
+        return NULL;
+    }
+    
+    // Track when each processor finishes its current task
+    int* processor_finish_time = (int*)calloc(num_processors, sizeof(int));
+    if (!processor_finish_time) {
+        perror("Memory allocation failed for processor finish times");
+        free(node_finish_time);
+        for (int i = 0; i < num_processors; i++) {
+            free(schedule[i]);
+        }
+        free(schedule);
+        free(on_critical_path);
+        free(topo_order);
+        return NULL;
+    }
+    
+    // Track which nodes are ready to be scheduled
+    bool* is_ready = (bool*)calloc(num_nodes, sizeof(bool));
+    if (!is_ready) {
+        perror("Memory allocation failed for ready status");
+        free(processor_finish_time);
+        free(node_finish_time);
+        for (int i = 0; i < num_processors; i++) {
+            free(schedule[i]);
+        }
+        free(schedule);
+        free(on_critical_path);
+        free(topo_order);
+        return NULL;
+    }
+    
+    // Calculate in-degree for each node
+    int* in_degree = (int*)calloc(num_nodes, sizeof(int));
+    if (!in_degree) {
+        perror("Memory allocation failed for in-degree");
+        free(is_ready);
+        free(processor_finish_time);
+        free(node_finish_time);
+        for (int i = 0; i < num_processors; i++) {
+            free(schedule[i]);
+        }
+        free(schedule);
+        free(on_critical_path);
+        free(topo_order);
+        return NULL;
+    }
+    
+    for (int i = 0; i < num_nodes; i++) {
+        for (int j = 0; j < num_nodes; j++) {
+            if (graph->adjacency_matrix[i][j]) {
+                in_degree[j]++;
+            }
+        }
+    }
+    
+    // Initially, nodes with in-degree 0 are ready
+    for (int i = 0; i < num_nodes; i++) {
+        if (in_degree[i] == 0) {
+            is_ready[i] = true;
+        }
+    }
+    
+    // Schedule tasks until all are scheduled
+    int scheduled_count = 0;
+    int current_time = 0;
+    
+    while (scheduled_count < num_nodes) {
+        // Find the earliest time a processor becomes available
+        int min_processor_time = INT_MAX;
+        for (int i = 0; i < num_processors; i++) {
+            if (processor_finish_time[i] < min_processor_time) {
+                min_processor_time = processor_finish_time[i];
+            }
+        }
+        current_time = min_processor_time;
+        
+        // Update ready nodes based on dependencies that have finished
+        for (int i = 0; i < num_nodes; i++) {
+            if (!is_ready[i] && in_degree[i] > 0) {
+                bool all_deps_finished = true;
+                for (int j = 0; j < num_nodes; j++) {
+                    if (graph->adjacency_matrix[j][i] && 
+                        node_finish_time[j] > current_time) {
+                        all_deps_finished = false;
+                        break;
+                    }
+                }
+                if (all_deps_finished) {
+                    is_ready[i] = true;
+                }
+            }
+        }
+        
+        // Find free processors
+        for (int p = 0; p < num_processors; p++) {
+            if (processor_finish_time[p] <= current_time) {
+                // Find highest priority ready task
+                int best_node = -1;
+                int best_priority = -1;
+                
+                for (int i = 0; i < num_nodes; i++) {
+                    if (is_ready[i] && !node_finish_time[i]) {
+                        // Priority based on critical path and weight
+                        int priority = (on_critical_path[i] ? 1000 : 0) + graph->nodes[i].weight;
+                        if (priority > best_priority) {
+                            best_priority = priority;
+                            best_node = i;
+                        }
+                    }
+                }
+                
+                if (best_node != -1) {
+                    // Schedule this node on this processor
+                    int slot = 0;
+                    while (schedule[p][slot] != -1) {
+                        slot++;
+                    }
+                    schedule[p][slot] = best_node;
+                    
+                    // Update finish times
+                    processor_finish_time[p] = current_time + graph->nodes[best_node].weight;
+                    node_finish_time[best_node] = processor_finish_time[p];
+                    
+                    // Mark as not ready anymore
+                    is_ready[best_node] = false;
+                    
+                    // Update dependent tasks' in-degree
+                    for (int i = 0; i < num_nodes; i++) {
+                        if (graph->adjacency_matrix[best_node][i]) {
+                            in_degree[i]--;
+                            if (in_degree[i] == 0) {
+                                is_ready[i] = true;
+                            }
+                        }
+                    }
+                    
+                    scheduled_count++;
+                }
+            }
+        }
+    }
+    
+    // Calculate total schedule length
+    *schedule_length = 0;
+    for (int i = 0; i < num_processors; i++) {
+        if (processor_finish_time[i] > *schedule_length) {
+            *schedule_length = processor_finish_time[i];
+        }
+    }
+    
+    free(in_degree);
+    free(is_ready);
+    free(processor_finish_time);
+    free(node_finish_time);
+    free(on_critical_path);
+    free(topo_order);
+    
+    return schedule;
+}
+
+// Clean up graph resources
+void free_graph(Graph* graph) {
+    if (!graph) {
+        return;
+    }
+    
+    // Free adjacency matrix
+    for (int i = 0; i < graph->num_nodes; i++) {
+        free(graph->adjacency_matrix[i]);
+    }
+    free(graph->adjacency_matrix);
+    
+    // Free node dependencies
+    for (int i = 0; i < graph->num_nodes; i++) {
+        free(graph->nodes[i].dependencies);
+        free(graph->nodes[i].dep_types);
+    }
+    
+    // Free nodes and visited array
+    free(graph->nodes);
+    free(graph->visited);
+    
+    // Free graph struct
+    free(graph);
+}
+
+// Example usage
+int main() {
+    // Create a simple dependency graph for testing
+    int num_nodes = 5;
+    Graph* graph = create_graph(num_nodes);
+    
+    // Set node properties
+    set_node_properties(graph, 0, SCRIPT_TYPE_PYTHON, "/path/to/script1.py", 10);
+    set_node_properties(graph, 1, SCRIPT_TYPE_SHELL, "/path/to/script2.sh", 5);
+    set_node_properties(graph, 2, SCRIPT_TYPE_C, "/path/to/script3.c", 20);
+    set_node_properties(graph, 3, SCRIPT_TYPE_ASSEMBLY, "/path/to/script4.asm", 15);
+    set_node_properties(graph, 4, SCRIPT_TYPE_PYTHON, "/path/to/script5.py", 8);
+    
+    // Add dependencies
+    add_edge(graph, 0, 1, DEPENDENCY_EXECUTION);
+    add_edge(graph, 0, 2, DEPENDENCY_DATA);
+    add_edge(graph, 1, 3, DEPENDENCY_EXECUTION);
+    add_edge(graph, 2, 3, DEPENDENCY_EXECUTION);
+    add_edge(graph, 3, 4, DEPENDENCY_IMPORT);
+    
+    // Check for cycles
+    if (has_cycle(graph)) {
+        printf("Graph contains cycles\n");
+    } else {
+        printf("Graph is acyclic\n");
+        
+        // Get topological sort
+        int* result = (int*)malloc(num_nodes * sizeof(int));
+        int result_size;
+        
+        if (topological_sort(graph, result, &result_size)) {
+            printf("Topological sort order: ");
+            for (int i = 0; i < result_size; i++) {
+                printf("%d ", result[i]);
+            }
+            printf("\n");
+            
+            // Calculate critical path
+            int critical_path_length;
+            int* critical_path = calculate_critical_path(graph, &critical_path_length);
+            
+            printf("Critical path length: %d\nCritical path nodes: ", critical_path_length);
+            for (int i = 0; i < num_nodes; i++) {
+                if (critical_path[i]) {
+                    printf("%d ", i);
+                }
+            }
+            printf("\n");
+            
+            // Calculate parallel schedule
+            int num_processors = 2;
+            int schedule_length;
+            int** schedule = calculate_parallel_schedule(graph, num_processors, &schedule_length);
+            
+            printf("Parallel schedule (length: %d):\n", schedule_length);
+            for (int p = 0; p < num_processors; p++) {
+                printf("Processor %d: ", p);
+                for (int s = 0; s < num_nodes; s++) {
+                    if (schedule[p][s] != -1) {
+                        printf("%d ", schedule[p][s]);
+                    }
+                }
+                printf("\n");
+            }
+            
+            // Clean up
+            for (int p = 0; p < num_processors; p++) {
+                free(schedule[p]);
+            }
+            free(schedule);
+            free(critical_path);
+            free(result);
+        } else {
+            printf("Topological sort failed due to cycles\n");
+        }
+    }
+    
+    // Clean up
+    free_graph(graph);
+    
+    return 0;
+}

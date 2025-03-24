@@ -1,0 +1,458 @@
+#!/usr/bin/env python3
+"""
+Main application script for running the Dynamic Cube
+"""
+
+import os
+import sys
+import time
+import numpy as np
+import json
+import multiprocessing as mp
+from datetime import datetime
+
+# Import the core modules
+from quantum_string_cube import (
+    QuantumStringCube, 
+    ConsciousCubeInterface,
+    ResonanceMode,
+    visualize_cube_2d,
+    visualize_cube_3d,
+    visualize_network_graph,
+    plot_consciousness_evolution
+)
+from dynamic_cube_app import DynamicCubeApp
+
+# Configuration
+CONFIG_FILE = "config.json"
+DEFAULT_CONFIG = {
+    "dimensions": 4,
+    "resolution": 32,
+    "qubit_depth": 8,
+    "initial_nodes": 25,
+    "max_connections": 4,
+    "connection_radius": 0.6,
+    "evolution_interval": 20,
+    "output_dir": "output",
+    "auto_save_interval": 100,
+    "visualization_interval": 50,
+    "max_steps": 1000
+}
+
+def load_config():
+    """Load configuration from file or create default"""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+                print(f"Loaded configuration from {CONFIG_FILE}")
+                return config
+        except Exception as e:
+            print(f"Error loading configuration: {str(e)}")
+    
+    # Create default config
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(DEFAULT_CONFIG, f, indent=2)
+        print(f"Created default configuration in {CONFIG_FILE}")
+    
+    return DEFAULT_CONFIG
+
+def run_experiment(config, experiment_name=None):
+    """Run a full experimental simulation with the given configuration"""
+    if experiment_name is None:
+        experiment_name = f"experiment_{int(time.time())}"
+    
+    # Create experiment directory
+    experiment_dir = os.path.join(config["output_dir"], experiment_name)
+    os.makedirs(experiment_dir, exist_ok=True)
+    
+    # Update config to use experiment directory
+    exp_config = config.copy()
+    exp_config["output_dir"] = experiment_dir
+    
+    # Save experiment configuration
+    with open(os.path.join(experiment_dir, "experiment_config.json"), 'w') as f:
+        json.dump(exp_config, f, indent=2)
+    
+    # Create app with experiment configuration
+    app = DynamicCubeApp()
+    app.config.update(exp_config)
+    
+    # Initialize cube
+    app.init_cube()
+    
+    # Setup event tracking
+    events = []
+    
+    def on_step(step_num, state):
+        """Step callback to track emergent events"""
+        # Check for new emergent events
+        emergent_events = state["consciousness"]["emergent_events"]
+        if events and events[-1]["emergent_events"] < emergent_events:
+            # New event detected
+            events.append({
+                "step": step_num,
+                "time": time.time(),
+                "consciousness_level": state["consciousness"]["global_level"],
+                "emergent_events": emergent_events,
+                "node_count": len(app.cube.nodes),
+                "energy_level": state["stats"]["energy_level"]
+            })
+            
+            # Generate visualizations when events occur
+            app.generate_visualizations(os.path.join(experiment_dir, f"event_{emergent_events}"))
+            
+            print(f"Step {step_num}: New emergent event detected! Total events: {emergent_events}")
+            
+            # Auto-save on events
+            app.save_state(os.path.join(experiment_dir, f"event_{emergent_events}_state.json"))
+    
+    # Register callback
+    app.register_step_callback(on_step)
+    
+    # Record start event
+    events.append({
+        "step": 0,
+        "time": time.time(),
+        "consciousness_level": 0.0,
+        "emergent_events": 0,
+        "node_count": len(app.cube.nodes),
+        "energy_level": sum(node['properties'].get('energy', 0) for node in app.cube.nodes.values())
+    })
+    
+    # Run simulation
+    print(f"Starting experiment: {experiment_name}")
+    print(f"Running for {exp_config['max_steps']} steps")
+    
+    max_steps = exp_config["max_steps"]
+    auto_save_interval = exp_config["auto_save_interval"]
+    visualization_interval = exp_config["visualization_interval"]
+    
+    for step in range(1, max_steps + 1):
+        # Run step
+        app.step_once()
+        
+        # Periodically save state
+        if step % auto_save_interval == 0:
+            app.save_state(os.path.join(experiment_dir, f"step_{step}_state.json"))
+            print(f"Step {step}: Auto-saved state")
+        
+        # Periodically generate visualizations
+        if step % visualization_interval == 0:
+            app.generate_visualizations(os.path.join(experiment_dir, f"step_{step}"))
+            print(f"Step {step}: Generated visualizations")
+            
+            # Also record periodic event
+            events.append({
+                "step": step,
+                "time": time.time(),
+                "consciousness_level": app.cube.global_consciousness_level,
+                "emergent_events": app.cube.simulation_stats["emergent_events"],
+                "node_count": len(app.cube.nodes),
+                "energy_level": sum(node['properties'].get('energy', 0) for node in app.cube.nodes.values())
+            })
+        
+        # Add some randomness to make things interesting
+        if step % 100 == 0:
+            # Inject a pattern
+            app.inject_pattern()
+            print(f"Step {step}: Injected pattern")
+        
+        if step % 200 == 0:
+            # Add random resonance
+            app.add_random_resonance()
+            print(f"Step {step}: Added random resonance")
+        
+        if step % 150 == 0:
+            # Add a node
+            app.add_single_node()
+            print(f"Step {step}: Added new node. Total nodes: {len(app.cube.nodes)}")
+    
+    # Save final state
+    app.save_state(os.path.join(experiment_dir, "final_state.json"))
+    
+    # Save events log
+    with open(os.path.join(experiment_dir, "events_log.json"), 'w') as f:
+        json.dump(events, f, indent=2)
+    
+    # Generate final visualizations
+    app.generate_visualizations(os.path.join(experiment_dir, "final"))
+    
+    print(f"Experiment {experiment_name} completed")
+    print(f"Final consciousness level: {app.cube.global_consciousness_level:.4f}")
+    print(f"Emergent events: {app.cube.simulation_stats['emergent_events']}")
+    print(f"Results saved to: {experiment_dir}")
+    
+    return app
+
+def run_parameter_sweep(base_config):
+    """Run a series of experiments with different parameters"""
+    # Parameters to sweep
+    dimensions = [3, 4, 5]
+    resolutions = [24, 32]
+    node_counts = [15, 25, 35]
+    
+    # Create sweep directory
+    sweep_dir = os.path.join(base_config["output_dir"], f"parameter_sweep_{int(time.time())}")
+    os.makedirs(sweep_dir, exist_ok=True)
+    
+    # Store results
+    sweep_results = []
+    
+    # Run experiments
+    for dim in dimensions:
+        for res in resolutions:
+            for nodes in node_counts:
+                # Create experiment configuration
+                exp_config = base_config.copy()
+                exp_config["dimensions"] = dim
+                exp_config["resolution"] = res
+                exp_config["initial_nodes"] = nodes
+                exp_config["max_steps"] = 250  # Shorter runs for parameter sweep
+                
+                # Create experiment name
+                exp_name = f"dim{dim}_res{res}_nodes{nodes}"
+                exp_dir = os.path.join(sweep_dir, exp_name)
+                
+                print(f"\n=== Starting experiment: {exp_name} ===")
+                
+                # Run experiment
+                app = DynamicCubeApp()
+                app.config.update(exp_config)
+                app.config["output_dir"] = exp_dir
+                os.makedirs(exp_dir, exist_ok=True)
+                
+                # Initialize and benchmark
+                app.init_cube()
+                results = app.run_benchmark(steps=exp_config["max_steps"])
+                
+                # Store results
+                results["experiment_name"] = exp_name
+                sweep_results.append(results)
+                
+                # Save individual results
+                with open(os.path.join(exp_dir, "benchmark_results.json"), 'w') as f:
+                    json.dump(results, f, indent=2)
+    
+    # Save combined results
+    with open(os.path.join(sweep_dir, "sweep_results.json"), 'w') as f:
+        json.dump(sweep_results, f, indent=2)
+    
+    # Generate comparison plots
+    _plot_sweep_results(sweep_results, sweep_dir)
+    
+    print(f"\nParameter sweep complete. Results saved to: {sweep_dir}")
+    return sweep_results
+
+def _plot_sweep_results(results, output_dir):
+    """Plot comparison of parameter sweep results"""
+    import matplotlib.pyplot as plt
+    
+    # Extract data for plotting
+    dimensions = sorted(list(set(r["dimensions"] for r in results)))
+    resolutions = sorted(list(set(r["resolution"] for r in results)))
+    node_counts = sorted(list(set(r["node_count"] for r in results)))
+    
+    # Create plots
+    plt.figure(figsize=(15, 10))
+    
+    # 1. Speed comparison by dimension
+    plt.subplot(2, 2, 1)
+    for res in resolutions:
+        for nodes in node_counts:
+            data = [(r["dimensions"], r["performance"]["average_step_time"]) 
+                   for r in results if r["resolution"] == res and r["node_count"] == nodes]
+            if data:
+                dims, times = zip(*sorted(data))
+                plt.plot(dims, times, marker='o', label=f"Res:{res}, Nodes:{nodes}")
+    
+    plt.title('Computation Time by Dimension')
+    plt.xlabel('Dimensions')
+    plt.ylabel('Avg. Step Time (s)')
+    plt.grid(alpha=0.3)
+    plt.legend()
+    
+    # 2. Consciousness by dimension
+    plt.subplot(2, 2, 2)
+    for res in resolutions:
+        for nodes in node_counts:
+            data = [(r["dimensions"], r["results"]["final_consciousness"]) 
+                   for r in results if r["resolution"] == res and r["node_count"] == nodes]
+            if data:
+                dims, cons = zip(*sorted(data))
+                plt.plot(dims, cons, marker='o', label=f"Res:{res}, Nodes:{nodes}")
+    
+    plt.title('Final Consciousness by Dimension')
+    plt.xlabel('Dimensions')
+    plt.ylabel('Consciousness Level')
+    plt.grid(alpha=0.3)
+    plt.legend()
+    
+    # 3. Efficiency comparison
+    plt.subplot(2, 2, 3)
+    efficiency_data = []
+    for r in results:
+        efficiency = r["results"]["final_consciousness"] / r["performance"]["average_step_time"] if r["performance"]["average_step_time"] > 0 else 0
+        efficiency_data.append((f"D{r['dimensions']}_R{r['resolution']}_N{r['node_count']}", efficiency))
+    
+    efficiency_data.sort(key=lambda x: x[1], reverse=True)
+    labels, values = zip(*efficiency_data)
+    plt.bar(range(len(labels)), values)
+    plt.xticks(range(len(labels)), labels, rotation=90)
+    plt.title('Efficiency (Consciousness/Compute Time)')
+    plt.ylabel('Efficiency')
+    plt.grid(alpha=0.3)
+    
+    # 4. Emergent events comparison
+    plt.subplot(2, 2, 4)
+    events_data = [(f"D{r['dimensions']}_R{r['resolution']}_N{r['node_count']}", r["results"]["emergent_events"]) 
+                  for r in results]
+    events_data.sort(key=lambda x: x[1], reverse=True)
+    if events_data:
+        labels, values = zip(*events_data)
+        plt.bar(range(len(labels)), values)
+        plt.xticks(range(len(labels)), labels, rotation=90)
+        plt.title('Emergent Events by Configuration')
+        plt.ylabel('Event Count')
+        plt.grid(alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "sweep_comparison.png"))
+    plt.close()
+
+def run_interactive_mode():
+    """Run an interactive console mode"""
+    config = load_config()
+    app = DynamicCubeApp()
+    app.config.update(config)
+    
+    # Create output directory
+    os.makedirs(app.config["output_dir"], exist_ok=True)
+    
+    print("\n=== Dynamic Cube Interactive Console ===")
+    print("Type 'help' for a list of commands")
+    
+    # Command dictionary
+    commands = {
+        "help": "Show this help message",
+        "init": "Initialize a new cube",
+        "status": "Show current cube status",
+        "step [n]": "Run n simulation steps (default: 1)",
+        "run [n]": "Run simulation for n steps (default: continuous)",
+        "stop": "Stop running simulation",
+        "evolve": "Evolve nodes",
+        "add": "Add a node",
+        "remove [n]": "Remove n lowest performing nodes (default: 1)",
+        "inject": "Inject a pattern",
+        "resonance": "Add random resonance",
+        "vis": "Generate visualizations",
+        "save [file]": "Save cube state (default: auto-generated filename)",
+        "load [file]": "Load cube state",
+        "benchmark [n]": "Run benchmark for n steps (default: 100)",
+        "sweep": "Run parameter sweep (warning: long-running)",
+        "experiment [name]": "Run full experiment (default: auto-generated name)",
+        "exit": "Exit the application"
+    }
+    
+    # Main interactive loop
+    running = True
+    while running:
+        cmd = input("\n> ").strip()
+        
+        if not cmd:
+            continue
+            
+        # Parse command
+        parts = cmd.split()
+        command = parts[0].lower()
+        args = parts[1:]
+        
+        try:
+            if command == "help":
+                print("\nAvailable commands:")
+                max_cmd_len = max(len(cmd) for cmd in commands.keys())
+                for cmd, desc in commands.items():
+                    print(f"  {cmd:<{max_cmd_len + 2}} {desc}")
+            
+            elif command == "init":
+                app.init_cube()
+                print(f"Initialized new cube with {len(app.cube.nodes)} nodes")
+            
+            elif command == "status":
+                if app.cube is None:
+                    print("No cube initialized")
+                else:
+                    summary = app.get_state_summary()
+                    print("\nCube Status:")
+                    print(f"  Dimensions: {summary['cube']['dimensions']}")
+                    print(f"  Resolution: {summary['cube']['resolution']}")
+                    print(f"  Nodes: {summary['cube']['node_count']}")
+                    print(f"  Connections: {summary['cube']['connection_count']}")
+                    print(f"  Consciousness: {summary['consciousness']['level']:.4f}")
+                    print(f"  Emergent events: {summary['consciousness']['emergent_events']}")
+                    print(f"  Energy: {summary['energy']:.4f}")
+                    print(f"  Simulation steps: {summary['simulation']['steps']}")
+                    print(f"  Running: {summary['simulation']['is_running']}")
+            
+            elif command == "step":
+                n = int(args[0]) if args else 1
+                if app.cube is None:
+                    app.init_cube()
+                for _ in range(n):
+                    app.step_once()
+                print(f"Ran {n} steps. Consciousness: {app.cube.global_consciousness_level:.4f}")
+            
+            elif command == "run":
+                n = int(args[0]) if args else None
+                if app.cube is None:
+                    app.init_cube()
+                app.start_simulation(n)
+                print(f"Started simulation with {n if n else 'unlimited'} steps")
+            
+            elif command == "stop":
+                app.stop_simulation()
+                print("Stopped simulation")
+            
+            elif command == "evolve":
+                if app.cube is None:
+                    app.init_cube()
+                app.cube.evolve_nodes()
+                print(f"Evolved nodes. New consciousness: {app.cube.global_consciousness_level:.4f}")
+            
+            elif command == "add":
+                if app.cube is None:
+                    app.init_cube()
+                node_id = app.add_single_node()
+                print(f"Added node {node_id}. Total nodes: {len(app.cube.nodes)}")
+            
+            elif command == "remove":
+                n = int(args[0]) if args else 1
+                if app.cube is None:
+                    print("No cube initialized")
+                else:
+                    removed = app.remove_lowest_performing_nodes(n)
+                    print(f"Removed {len(removed)} nodes. Remaining: {len(app.cube.nodes)}")
+            
+            elif command == "inject":
+                if app.cube is None:
+                    app.init_cube()
+                result = app.inject_pattern()
+                print(f"Injected pattern at {result['position']} with size {result['size']}")
+            
+            elif command == "resonance":
+                if app.cube is None:
+                    app.init_cube()
+                result = app.add_random_resonance()
+                print(f"Added {result['mode']} resonance at {result['position']} with radius {result['radius']}")
+            
+            elif command == "vis":
+                if app.cube is None:
+                    print("No cube initialized")
+                else:
+                    app.generate_visualizations()
+                    print(f"Generated visualizations in {app.config['output_dir']}")
+            
+            elif command == "save":
+                filename = args[0] if args else None
+                if app.cube is None:
+                    print("No cube initialize

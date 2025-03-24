@@ -1,0 +1,18 @@
+# Core dependencies
+networkx
+numpy
+Pillow
+matplotlib
+
+# Optional feature sets
+pandas
+scipy
+requests
+aiohttp
+fastapi
+uvicorn
+scikit-learn
+tensorflow
+torch
+numba
+pydot

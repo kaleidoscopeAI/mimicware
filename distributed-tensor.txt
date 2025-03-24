@@ -1,0 +1,181 @@
+class DistributedTensorManager:
+    @ray.remote
+    def gather_tensor(self, tensor_id: str) -> torch.Tensor:
+        all_metadata = self.comm.allgather(self.shard_map[tensor_id][self.rank])
+        max_dim = max(meta['dimension'] for meta in all_metadata)
+        shape = list(all_metadata[0]['shape'])
+        total_size = sum(len(meta['indices']) for meta in all_metadata)
+        shape[max_dim] = total_size
+        
+        result = torch.zeros(shape, device=self.device)
+        
+        # Gather all shards
+        gathered_shards = self.comm.allgather(self.tensor_store[tensor_id].data)
+        
+        # Reconstruct tensor
+        for shard_meta, shard_data in zip(all_metadata, gathered_shards):
+            slices = [slice(None)] * len(shape)
+            slices[shard_meta['dimension']] = shard_meta['indices']
+            result[slices] = shard_data
+            
+        return result
+        
+    @ray.remote
+    def distributed_matmul(self, tensor_id_a: str, tensor_id_b: str) -> str:
+        # Get local shards
+        shard_a = self.tensor_store[tensor_id_a]
+        shard_b = self.tensor_store[tensor_id_b]
+        
+        # Perform local computation
+        local_result = torch.matmul(shard_a.data, shard_b.data)
+        
+        # All-reduce across ranks
+        dist.all_reduce(local_result)
+        
+        # Store and return new tensor ID
+        result_id = self._generate_id()
+        self.tensor_store[result_id] = TensorShard(
+            data=local_result,
+            indices=torch.arange(local_result.size(0)),
+            dimension=0
+        )
+        
+        return result_id
+        
+    def distributed_operation(self, op_name: str, tensor_id: str, *args, **kwargs) -> str:
+        shard = self.tensor_store[tensor_id]
+        
+        if op_name == 'sum':
+            result = self._distributed_sum(shard, *args, **kwargs)
+        elif op_name == 'mean':
+            result = self._distributed_mean(shard, *args, **kwargs)
+        elif op_name == 'max':
+            result = self._distributed_max(shard, *args, **kwargs)
+        else:
+            raise ValueError(f"Unsupported operation: {op_name}")
+            
+        result_id = self._generate_id()
+        self.tensor_store[result_id] = result
+        return result_id
+        
+    def _distributed_sum(self, shard: TensorShard, dim: Optional[int] = None) -> TensorShard:
+        local_sum = shard.data.sum(dim=dim)
+        
+        if dim is not None:
+            # Reduce across specified dimension
+            dist.all_reduce(local_sum)
+            return TensorShard(
+                data=local_sum,
+                indices=torch.arange(local_sum.size(0)),
+                dimension=0
+            )
+        else:
+            # Global sum
+            global_sum = torch.tensor([local_sum], device=self.device)
+            dist.all_reduce(global_sum)
+            return TensorShard(
+                data=global_sum,
+                indices=torch.tensor([0]),
+                dimension=0
+            )
+            
+    def _distributed_mean(self, shard: TensorShard, dim: Optional[int] = None) -> TensorShard:
+        local_sum = shard.data.sum(dim=dim)
+        local_count = torch.tensor([shard.data.size(dim) if dim is not None else shard.data.numel()],
+                                 device=self.device)
+        
+        # Reduce sum and count
+        dist.all_reduce(local_sum)
+        dist.all_reduce(local_count)
+        
+        mean = local_sum / local_count
+        
+        return TensorShard(
+            data=mean,
+            indices=torch.arange(mean.size(0)) if dim is not None else torch.tensor([0]),
+            dimension=0
+        )
+        
+    def _distributed_max(self, shard: TensorShard, dim: Optional[int] = None) -> TensorShard:
+        local_max = shard.data.max(dim=dim).values if dim is not None else shard.data.max()
+        
+        # Reduce maximum
+        dist.all_reduce(local_max, op=dist.ReduceOp.MAX)
+        
+        return TensorShard(
+            data=local_max,
+            indices=torch.arange(local_max.size(0)) if dim is not None else torch.tensor([0]),
+            dimension=0
+        )
+        
+    def synchronize(self) -> None:
+        dist.barrier()
+        torch.cuda.synchronize() if torch.cuda.is_available() else None
+
+class DistributedTensorProcessor:
+    def __init__(self, world_size: int):
+        self.world_size = world_size
+        self.tensor_manager = DistributedTensorManager(world_size)
+        self.operation_queue = asyncio.Queue()
+        self.result_queue = asyncio.Queue()
+        
+    async def process_operation(self, op_type: str, *args, **kwargs) -> str:
+        await self.operation_queue.put((op_type, args, kwargs))
+        return await self.result_queue.get()
+        
+    async def run_processing_loop(self):
+        while True:
+            op_type, args, kwargs = await self.operation_queue.get()
+            
+            try:
+                if op_type == 'matmul':
+                    result_id = await self.tensor_manager.distributed_matmul.remote(*args)
+                elif op_type in ['sum', 'mean', 'max']:
+                    result_id = self.tensor_manager.distributed_operation(op_type, *args, **kwargs)
+                else:
+                    raise ValueError(f"Unknown operation type: {op_type}")
+                    
+                await self.result_queue.put(result_id)
+                
+            except Exception as e:
+                await self.result_queue.put(e)
+                
+    async def gather_results(self, tensor_id: str) -> torch.Tensor:
+        return await self.tensor_manager.gather_tensor.remote(tensor_id)
+        
+class DistributedOptimization:
+    def __init__(self, tensors: List[str], tensor_manager: DistributedTensorManager):
+        self.tensors = tensors
+        self.tensor_manager = tensor_manager
+        self.optimizer = DistributedOptimizer(
+            optimizer_cls=torch.optim.Adam,
+            params_rref=[
+                RRef(self.tensor_manager.tensor_store[tid].data)
+                for tid in tensors
+            ],
+            lr=0.01
+        )
+        
+    async def optimize_step(self, loss_fn) -> float:
+        self.optimizer.zero_grad()
+        
+        # Compute loss
+        loss = await self._compute_loss(loss_fn)
+        
+        # Backward pass
+        loss.backward()
+        
+        # Optimize
+        self.optimizer.step()
+        
+        return loss.item()
+        
+    async def _compute_loss(self, loss_fn) -> torch.Tensor:
+        tensors = [
+            await self.tensor_manager.gather_tensor.remote(tid)
+            for tid in self.tensors
+        ]
+        return loss_fn(*tensors)
+
+def create_distributed_processor(world_size: int) -> DistributedTensorProcessor:
+    return DistributedTensorProcessor(world_size)
